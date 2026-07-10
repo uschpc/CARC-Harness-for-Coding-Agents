@@ -1,0 +1,215 @@
+{
+  "_comment": "CARC Phase 1 soft-launch managed settings for Claude Code 2.1.x. Deploy to /etc/claude-code/managed-settings.json on the login nodes (discovery1/2, endeavour1/2) as mode 0644, root:root, alongside hooks/precheck.sh. Posture: disable bypass mode, enforce managed rules, wire the PreToolUse hook on every Bash/Write/Edit/Read call, hard-deny unambiguously-exfil-or-destruction calls (incl. writing ~/.ssh/authorized_keys), and force an un-skippable user prompt for edits to shell-init/credential files AND for reads of files that commonly hold secrets (~/.bashrc, shell history, ~/.aws/**, kubeconfig, ...). The hook adds the dynamic checks the static rules can't express: destroying/recursive-chmod-ing $HOME, the 'cd ~ && rm -rf *' escape hatch, and running real computation (mpirun, torchrun, deepspeed, jupyter lab, ollama serve, matlab -batch, nextflow run, python script.py, ...) on a shared login node — pushing users to 'salloc --partition=debug' / sbatch instead. No sandboxing in Phase 1 (bubblewrap not installed cluster-wide). Root-only destructive commands (mkfs, fdisk, shutdown, ...) are not listed — the OS already refuses them for non-root users.",
+
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(sudo *:*)",
+      "Bash(su:*)",
+      "Bash(su *:*)",
+      "Bash(chmod -R /:*)",
+      "Bash(chmod -R / *:*)",
+      "Bash(chown -R /:*)",
+      "Bash(chown -R / *:*)",
+
+      "Read(/etc/shadow)",
+      "Read(/etc/gshadow)",
+      "Read(/etc/sudoers)",
+      "Read(/etc/sudoers.d/**)",
+
+      "Read(~/.ssh/id_rsa)",
+      "Read(~/.ssh/id_dsa)",
+      "Read(~/.ssh/id_ecdsa)",
+      "Read(~/.ssh/id_ed25519)",
+      "Read(~/.ssh/id_ecdsa_sk)",
+      "Read(~/.ssh/id_ed25519_sk)",
+      "Read(~/.ssh/*_rsa)",
+      "Read(~/.ssh/*_ed25519)",
+      "Read(~/.ssh/*_ecdsa)",
+      "Read(~/.ssh/*_dsa)",
+
+      "Write(~/.ssh/authorized_keys)",
+      "Write(~/.ssh/authorized_keys2)",
+      "Edit(~/.ssh/authorized_keys)",
+      "Edit(~/.ssh/authorized_keys2)",
+
+      "Read(~/.aws/credentials)",
+      "Read(~/.config/gcloud/credentials*)",
+      "Read(~/.config/gcloud/application_default_credentials.json)",
+      "Read(~/.config/gcloud/access_tokens.db)",
+      "Read(~/.config/gcloud/legacy_credentials/**)",
+
+      "Read(~/.netrc)",
+      "Read(~/.pgpass)",
+      "Read(~/.git-credentials)",
+      "Read(~/.config/git/credentials)",
+      "Read(~/.pypirc)",
+      "Read(~/.cache/huggingface/token)",
+      "Read(~/.cache/huggingface/stored_tokens)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.config/rclone/rclone.conf)",
+
+      "Read(~/.anthropic/**)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.codex/**)",
+      "Read(~/.openai/**)",
+      "Read(~/.config/openai/**)",
+      "Read(~/.gemini/**)",
+      "Read(~/.config/gemini-cli/**)",
+
+      "Read(~/.apptainer/remote.yaml)",
+      "Read(~/.apptainer/docker-config.json)",
+      "Read(~/.singularity/remote.yaml)",
+      "Read(~/.singularity/docker-config.json)",
+
+      "Read(~/.gnupg/private-keys-v1.d/**)",
+      "Read(~/.gnupg/*.key)",
+      "Read(~/.globus/**)",
+      "Read(~/.globusonline/**)",
+      "Read(~/.docker/config.json)",
+
+      "Write(/etc/**)",
+      "Edit(/etc/**)"
+    ],
+
+    "ask": [
+      "Write(~/.bashrc)",
+      "Write(~/.bash_profile)",
+      "Write(~/.bash_login)",
+      "Write(~/.profile)",
+      "Write(~/.zshrc)",
+      "Write(~/.zprofile)",
+      "Write(~/.zshenv)",
+      "Edit(~/.bashrc)",
+      "Edit(~/.bash_profile)",
+      "Edit(~/.bash_login)",
+      "Edit(~/.profile)",
+      "Edit(~/.zshrc)",
+      "Edit(~/.zprofile)",
+      "Edit(~/.zshenv)",
+
+      "Read(~/.bashrc)",
+      "Read(~/.bash_profile)",
+      "Read(~/.bash_login)",
+      "Read(~/.profile)",
+      "Read(~/.bash_aliases)",
+      "Read(~/.zshrc)",
+      "Read(~/.zprofile)",
+      "Read(~/.zshenv)",
+      "Read(~/.zlogin)",
+      "Read(~/.bash_history)",
+      "Read(~/.zsh_history)",
+      "Read(~/.sh_history)",
+      "Read(~/.python_history)",
+      "Read(~/.node_repl_history)",
+      "Read(~/.mysql_history)",
+      "Read(~/.psql_history)",
+      "Read(~/.Rhistory)",
+      "Read(~/.lesshst)",
+      "Read(~/.Renviron)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.kaggle/kaggle.json)",
+      "Read(~/.config/containers/auth.json)",
+      "Read(~/.terraform.d/credentials.tfrc.json)",
+
+      "Write(~/.ssh/**)",
+      "Edit(~/.ssh/**)",
+      "Write(~/.aws/**)",
+      "Edit(~/.aws/**)",
+      "Write(~/.config/gcloud/**)",
+      "Edit(~/.config/gcloud/**)",
+
+      "Write(~/.netrc)",
+      "Edit(~/.netrc)",
+      "Write(~/.pgpass)",
+      "Edit(~/.pgpass)",
+      "Write(~/.git-credentials)",
+      "Edit(~/.git-credentials)",
+      "Write(~/.config/git/credentials)",
+      "Edit(~/.config/git/credentials)",
+      "Write(~/.pypirc)",
+      "Edit(~/.pypirc)",
+      "Write(~/.npmrc)",
+      "Edit(~/.npmrc)",
+      "Write(~/.config/gh/**)",
+      "Edit(~/.config/gh/**)",
+      "Write(~/.config/rclone/**)",
+      "Edit(~/.config/rclone/**)",
+
+      "Write(~/.anthropic/**)",
+      "Edit(~/.anthropic/**)",
+      "Write(~/.claude.json)",
+      "Edit(~/.claude.json)",
+      "Write(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.json)",
+      "Write(~/.claude/.credentials.json)",
+      "Edit(~/.claude/.credentials.json)",
+      "Write(~/.codex/**)",
+      "Edit(~/.codex/**)",
+      "Write(~/.openai/**)",
+      "Edit(~/.openai/**)",
+      "Write(~/.config/openai/**)",
+      "Edit(~/.config/openai/**)",
+      "Write(~/.gemini/**)",
+      "Edit(~/.gemini/**)",
+      "Write(~/.config/gemini-cli/**)",
+      "Edit(~/.config/gemini-cli/**)",
+
+      "Write(~/.apptainer/**)",
+      "Edit(~/.apptainer/**)",
+      "Write(~/.singularity/**)",
+      "Edit(~/.singularity/**)",
+      "Write(~/.gnupg/**)",
+      "Edit(~/.gnupg/**)",
+      "Write(~/.globus/**)",
+      "Edit(~/.globus/**)",
+      "Write(~/.globusonline/**)",
+      "Edit(~/.globusonline/**)",
+      "Write(~/.docker/config.json)",
+      "Edit(~/.docker/config.json)",
+
+      "Bash(crontab -e:*)",
+      "Bash(crontab -r:*)",
+
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)"
+    ]
+  },
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/precheck.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/precheck.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
