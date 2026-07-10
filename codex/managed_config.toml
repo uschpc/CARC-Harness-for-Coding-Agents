@@ -1,0 +1,16 @@
+# CARC managed Codex defaults.
+#
+# Install as /etc/codex/managed_config.toml. This sets launch defaults. The
+# hard limits live in /etc/codex/requirements.toml.
+
+approval_policy = "untrusted"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+hooks = true
+browser_use = false
+computer_use = false
+in_app_browser = false

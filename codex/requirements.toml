@@ -1,0 +1,58 @@
+# CARC admin-enforced Codex requirements.
+#
+# Install as /etc/codex/requirements.toml. Recent Codex CLI versions treat
+# this file as an admin requirement layer that users cannot weaken with
+# ~/.codex/config.toml or command-line config overrides.
+
+allowed_approval_policies = ["untrusted", "on-request"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+
+# Empty means only "disabled" is allowed.
+allowed_web_search_modes = []
+
+# Managed hooks remain active, but user/project/session/plugin hooks are
+# skipped. This keeps the CARC precheck hook from being bypassed or diluted by
+# project-local hook config.
+allow_managed_hooks_only = true
+
+[features]
+hooks = true
+browser_use = false
+computer_use = false
+in_app_browser = false
+
+[permissions.filesystem]
+deny_read = [
+  "~/.ssh",
+  "~/.aws",
+  "~/.azure",
+  "~/.config/gcloud",
+  "~/.kube",
+  "~/.docker/config.json",
+  "~/.config/containers/auth.json",
+  "~/.git-credentials",
+  "~/.config/gh/hosts.yml",
+  "~/.codex/auth.json",
+]
+
+[hooks]
+managed_dir = "/etc/codex/hooks"
+
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch|Edit|Write|Read|MultiEdit|NotebookEdit)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/etc/codex/hooks/precheck.sh"
+timeout = 10
+statusMessage = "Checking CARC policy"
+
+[rules]
+prefix_rules = [
+  { pattern = [{ token = "sudo" }], decision = "forbidden", justification = "sudo is not available to students on CARC shared nodes." },
+  { pattern = [{ token = "su" }], decision = "forbidden", justification = "Do not switch users from a Codex session on shared CARC systems." },
+  { pattern = [{ token = "rm" }], decision = "prompt", justification = "Require explicit review before deleting files on shared CARC systems." },
+  { pattern = [{ token = "sbatch" }], decision = "prompt", justification = "Review Slurm jobs before submission." },
+  { pattern = [{ token = "scancel" }], decision = "prompt", justification = "Review job cancellation before changing running work." },
+  { pattern = [{ token = "git" }, { token = "push" }], decision = "prompt", justification = "Review outbound repository changes before pushing." },
+]
