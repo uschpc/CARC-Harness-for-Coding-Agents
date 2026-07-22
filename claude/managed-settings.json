@@ -1,6 +1,8 @@
 {
   "_comment": "CARC Phase 1 soft-launch managed settings for Claude Code 2.1.x. Deploy to /etc/claude-code/managed-settings.json on the login nodes (discovery1/2, endeavour1/2) as mode 0644, root:root, alongside hooks/precheck.sh. Posture: disable bypass mode, enforce managed rules, wire the PreToolUse hook on every Bash/Write/Edit/Read call, hard-deny unambiguously-exfil-or-destruction calls (incl. writing ~/.ssh/authorized_keys), and force an un-skippable user prompt for edits to shell-init/credential files AND for reads of files that commonly hold secrets (~/.bashrc, shell history, ~/.aws/**, kubeconfig, ...). The hook adds the dynamic checks the static rules can't express: destroying/recursive-chmod-ing $HOME, the 'cd ~ && rm -rf *' escape hatch, and running real computation (mpirun, torchrun, deepspeed, jupyter lab, ollama serve, matlab -batch, nextflow run, python script.py, ...) on a shared login node — pushing users to 'salloc --partition=debug' / sbatch instead. No sandboxing in Phase 1 (bubblewrap not installed cluster-wide). Root-only destructive commands (mkfs, fdisk, shutdown, ...) are not listed — the OS already refuses them for non-root users.",
 
+  "_comment_rev_2026_07_21": "Revision for Claude Code >= 2.1.210. (1) Removed dead Write(path) rules — file permission checks match only Edit(path)/Read(path), and Edit rules already cover the Write and NotebookEdit tools. Every removed Write rule had an identical Edit twin, so no coverage was lost; this only silences the startup warnings added in 2.1.210. (2) Changed /etc rules to //etc — a single leading slash anchors at the settings source directory (/etc/claude-code/), NOT the filesystem root, so the previous rules silently protected nothing. Verified empirically: Read(/etc/sudoers) fell through to a kernel EACCES instead of a rule denial, while the ~/ rules denied correctly. (3) Added Edit ask-rules for shell-init and credential paths that previously prompted on read but not on write (~/.bash_aliases, ~/.zlogin, ~/.Renviron, ~/.kube, ~/.azure, ~/.terraform.d, ~/.cache/huggingface).",
+
   "allowManagedPermissionRulesOnly": true,
   "allowManagedHooksOnly": true,
 
@@ -18,10 +20,10 @@
       "Bash(chown -R /:*)",
       "Bash(chown -R / *:*)",
 
-      "Read(/etc/shadow)",
-      "Read(/etc/gshadow)",
-      "Read(/etc/sudoers)",
-      "Read(/etc/sudoers.d/**)",
+      "Read(//etc/shadow)",
+      "Read(//etc/gshadow)",
+      "Read(//etc/sudoers)",
+      "Read(//etc/sudoers.d/**)",
 
       "Read(~/.ssh/id_rsa)",
       "Read(~/.ssh/id_dsa)",
@@ -34,8 +36,6 @@
       "Read(~/.ssh/*_ecdsa)",
       "Read(~/.ssh/*_dsa)",
 
-      "Write(~/.ssh/authorized_keys)",
-      "Write(~/.ssh/authorized_keys2)",
       "Edit(~/.ssh/authorized_keys)",
       "Edit(~/.ssh/authorized_keys2)",
 
@@ -74,18 +74,10 @@
       "Read(~/.globusonline/**)",
       "Read(~/.docker/config.json)",
 
-      "Write(/etc/**)",
-      "Edit(/etc/**)"
+      "Edit(//etc/**)"
     ],
 
     "ask": [
-      "Write(~/.bashrc)",
-      "Write(~/.bash_profile)",
-      "Write(~/.bash_login)",
-      "Write(~/.profile)",
-      "Write(~/.zshrc)",
-      "Write(~/.zprofile)",
-      "Write(~/.zshenv)",
       "Edit(~/.bashrc)",
       "Edit(~/.bash_profile)",
       "Edit(~/.bash_login)",
@@ -123,60 +115,42 @@
       "Read(~/.config/containers/auth.json)",
       "Read(~/.terraform.d/credentials.tfrc.json)",
 
-      "Write(~/.ssh/**)",
+      "Edit(~/.bash_aliases)",
+      "Edit(~/.zlogin)",
+      "Edit(~/.Renviron)",
+      "Edit(~/.kube/**)",
+      "Edit(~/.azure/**)",
+      "Edit(~/.terraform.d/**)",
+      "Edit(~/.cache/huggingface/**)",
+
       "Edit(~/.ssh/**)",
-      "Write(~/.aws/**)",
       "Edit(~/.aws/**)",
-      "Write(~/.config/gcloud/**)",
       "Edit(~/.config/gcloud/**)",
 
-      "Write(~/.netrc)",
       "Edit(~/.netrc)",
-      "Write(~/.pgpass)",
       "Edit(~/.pgpass)",
-      "Write(~/.git-credentials)",
       "Edit(~/.git-credentials)",
-      "Write(~/.config/git/credentials)",
       "Edit(~/.config/git/credentials)",
-      "Write(~/.pypirc)",
       "Edit(~/.pypirc)",
-      "Write(~/.npmrc)",
       "Edit(~/.npmrc)",
-      "Write(~/.config/gh/**)",
       "Edit(~/.config/gh/**)",
-      "Write(~/.config/rclone/**)",
       "Edit(~/.config/rclone/**)",
 
-      "Write(~/.anthropic/**)",
       "Edit(~/.anthropic/**)",
-      "Write(~/.claude.json)",
       "Edit(~/.claude.json)",
-      "Write(~/.claude/settings.json)",
       "Edit(~/.claude/settings.json)",
-      "Write(~/.claude/.credentials.json)",
       "Edit(~/.claude/.credentials.json)",
-      "Write(~/.codex/**)",
       "Edit(~/.codex/**)",
-      "Write(~/.openai/**)",
       "Edit(~/.openai/**)",
-      "Write(~/.config/openai/**)",
       "Edit(~/.config/openai/**)",
-      "Write(~/.gemini/**)",
       "Edit(~/.gemini/**)",
-      "Write(~/.config/gemini-cli/**)",
       "Edit(~/.config/gemini-cli/**)",
 
-      "Write(~/.apptainer/**)",
       "Edit(~/.apptainer/**)",
-      "Write(~/.singularity/**)",
       "Edit(~/.singularity/**)",
-      "Write(~/.gnupg/**)",
       "Edit(~/.gnupg/**)",
-      "Write(~/.globus/**)",
       "Edit(~/.globus/**)",
-      "Write(~/.globusonline/**)",
       "Edit(~/.globusonline/**)",
-      "Write(~/.docker/config.json)",
       "Edit(~/.docker/config.json)",
 
       "Bash(crontab -e:*)",

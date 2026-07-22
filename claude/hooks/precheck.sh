@@ -386,7 +386,7 @@ fi
 check_foreign_shared_destructive() {
     local targets
     targets=$(printf '%s' "$EXPANDED" | python3 -c '
-import re, sys
+import os, re, sys
 s = sys.stdin.read()
 
 # Verbs whose path args we treat as destructive/overwriting targets. cp and
@@ -394,7 +394,35 @@ s = sys.stdin.read()
 # cp -a/-p quota case is handled separately in §5).
 DESTRUCTIVE = {"rm", "mv", "chmod", "chown", "truncate", "shred", "tee"}
 
+# The current user, for resolving $USER / $LOGNAME in a target path. We never
+# eval the command text — this is a literal string substitution only, so a
+# crafted command cannot execute anything through this path.
+ME = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+
+def norm(p):
+    # (a) Remove quote characters everywhere in the token, not just at its
+    #     ends. Tokens arrive straight from str.split(), so a quoted path is
+    #     still carrying its quote characters and would fail the startswith()
+    #     test below — i.e. rm -rf "/project2/other/x" would sail past this
+    #     whole check, and the common careful-shell idiom
+    #     rm -rf /scratch1/"$USER"/tmp carries *interior* quotes that would
+    #     make the username segment compare as unequal. The shell removes
+    #     unescaped quotes before exec, so removing them all mirrors what the
+    #     kernel will actually see. (A filename with a literal escaped quote
+    #     is normalised differently than the shell would — accepted: it only
+    #     affects which side of the own/foreign classification a pathological
+    #     name lands on.)
+    p = p.replace("\"", "").replace("\x27", "")
+    # (b) Resolve the two variables that legitimately name the current user, so
+    #     /scratch1/$USER/... is recognised as the user own directory. Any other
+    #     variable is deliberately left unresolved and is rejected downstream.
+    if ME:
+        for v in ("${USER}", "$USER", "${LOGNAME}", "$LOGNAME"):
+            p = p.replace(v, ME)
+    return p
+
 def emit(p, out):
+    p = norm(p)
     if p.startswith("/project2/") or p.startswith("/scratch1/"):
         out.append(p)
 
@@ -449,6 +477,9 @@ for p in out:
             /project2/*)
                 local sub="${tgt#/project2/}"; sub="${sub%%/*}"
                 [ -z "$sub" ] && continue
+                case "$sub" in *'$'*)
+                    block "destructive op targets /project2/$sub — the group segment contains an unexpanded shell variable, so ownership cannot be verified. Spell the group name out." ;;
+                esac
                 if ! user_in_group "$sub"; then
                     block "destructive op targets /project2/$sub — you are not a member of group $sub; even a world-writable dir in another lab is off-limits"
                 fi
@@ -456,6 +487,12 @@ for p in out:
             /scratch1/*)
                 local u="${tgt#/scratch1/}"; u="${u%%/*}"
                 [ -z "$u" ] && continue
+                # $USER / $LOGNAME were already resolved during extraction. A
+                # remaining '$' is some other variable we cannot resolve, so we
+                # fail closed rather than guess whose directory it names.
+                case "$u" in *'$'*)
+                    block "destructive op targets /scratch1/$u — the username segment contains an unexpanded shell variable, so ownership cannot be verified. Write it as /scratch1/$USER/... or spell your username out." ;;
+                esac
                 if [ "$u" != "$USER" ]; then
                     block "destructive op targets /scratch1/$u — not your scratch directory"
                 fi
@@ -478,14 +515,26 @@ check_foreign_shared_destructive
 check_cd_traversal() {
     local cd_targets
     cd_targets=$(printf '%s' "$EXPANDED" | python3 -c '
-import re, sys
+import os, re, sys
 s = sys.stdin.read()
+# Neutralise quoting before matching, so cd "/scratch1/other" is seen the
+# same as the bare form. Quotes are *removed* (not replaced with spaces):
+# a glued form like cd /scratch1/"other" must collapse to one path token,
+# which a space-replacement would split and miss.
+s = s.replace(chr(34), "").replace(chr(39), "")
 # Is there any destructive verb anywhere in the expanded command? If not,
 # any cd is uninteresting.
 if not re.search(r"\b(rm|chmod|chown|mv|cp)\b", s):
     sys.exit(0)
-for m in re.finditer(r"\b(?:cd|pushd)\s+(/project2/[A-Za-z0-9._-]+|/scratch1/[A-Za-z0-9._-]+)", s):
-    print(m.group(1))
+# Same literal (never eval-ed) resolution of the current user as in §3.
+ME = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+def norm(p):
+    if ME:
+        for v in ("${USER}", "$USER", "${LOGNAME}", "$LOGNAME"):
+            p = p.replace(v, ME)
+    return p
+for m in re.finditer(r"\b(?:cd|pushd)\s+(/project2/[A-Za-z0-9._${}-]+|/scratch1/[A-Za-z0-9._${}-]+)", s):
+    print(norm(m.group(1)))
 ' | sort -u)
     [ -z "$cd_targets" ] && return
     load_user_groups
@@ -712,17 +761,194 @@ if has_pattern '(^|[^a-zA-Z0-9_])(conda|mamba)[[:space:]]+(create|install|env[[:
     emit_ask "conda/mamba envs are large; for big envs use '--prefix /project2/<your_group>/<env>' rather than /home1. Confirm to continue."
 fi
 
-# 9. sbatch — submitting a job. Always show the user the script first and
-#    confirm its resource asks before anything hits the queue.
-if has_pattern '(^|[^a-zA-Z0-9_])sbatch([[:space:]]|$)'; then
+# 9. sbatch — submitting a job. Show the user the script first and confirm its
+#    resource asks before anything hits the queue.
+#
+#    Exemption: a submission whose partition is 'debug' is not prompted,
+#    mirroring how 9b treats salloc. debug is capped by QOS at 5 running /
+#    5 queued / 48 CPUs per user with a 1-hour wall limit, so a runaway
+#    submission loop there cannot draw down the group's allocation.
+#
+#    Partition resolution follows sbatch's own precedence: a command-line
+#    -p/--partition wins outright; with no command-line flag, the script's
+#    '#SBATCH' prologue is inspected (directives end at the first real
+#    command line, exactly as sbatch reads them) and the exemption applies
+#    only when every partition directive there says exactly 'debug'.
+#    Anything indeterminate — script operand not found (boolean long flags
+#    like --test-only before the operand mis-skip it), heredoc or --wrap
+#    submission, unreadable/missing file, mixed partitions — falls back to
+#    prompting, which is the pre-exemption behaviour.
+#
+#    Matching is command-position only, via slurm_segments(). The previous
+#    substring match fired on the word 'sbatch' anywhere in the command, so
+#    'grep sbatch *.log', 'cat notes-on-sbatch.md', or an echo that merely
+#    mentions it all prompted. This is the same defect §3 was rewritten to
+#    avoid; rules 9/9b had never been given the same treatment.
+slurm_segments() {
+    printf '%s' "$EXPANDED" | python3 -c '
+import re, sys
+
+VERBS = {"sbatch", "salloc", "srun"}
+# Wrappers that run their argument as the real command (same set §3 and the
+# Bash rule matcher use), so "timeout 60 srun --pty bash" is still seen.
+WRAP = {"timeout","time","nice","nohup","stdbuf","command","builtin","noglob","env"}
+ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+for line in sys.stdin.read().splitlines():
+    # Same segmentation as §3: the first token of each segment is its command.
+    for seg in re.split(r"\|\||&&|[;|&()]", line):
+        toks = seg.split()
+        i = 0
+        while i < len(toks):
+            base = toks[i].split("/")[-1]
+            if ASSIGN.match(toks[i]):
+                i += 1
+                continue
+            if base in WRAP:
+                i += 1
+                # Consume the wrapper own flags and operand, so
+                # "timeout 60 sbatch ..." and "nice -n 5 srun ..." still
+                # resolve to the real command word rather than to "60"/"5".
+                # Flags that take a non-numeric argument ("env -u VAR",
+                # "timeout -s KILL") also consume that argument, otherwise
+                # the argument itself would be mistaken for the command.
+                while i < len(toks) and (toks[i].startswith("-")
+                        or re.match(r"^[0-9]+(\.[0-9]+)?[smhd]?$", toks[i])):
+                    if toks[i] in ("-u", "-s", "--signal", "--unset"):
+                        i += 1
+                    i += 1
+                continue
+            break
+        if i >= len(toks):
+            continue
+        verb = toks[i].split("/")[-1]
+        if verb in VERBS:
+            # verb <TAB> the rest of that segment, for flag inspection.
+            print(verb + "\t" + " ".join(toks[i+1:]))
+'
+}
+SLURM_SEGS=$(slurm_segments)
+
+# Does a segment for $1 exist whose flags do NOT name the debug partition?
+slurm_seg_nondebug() {
+    local verb="$1" v rest
+    while IFS=$'\t' read -r v rest; do
+        [ "$v" = "$verb" ] || continue
+        printf '%s' "$rest" | grep -Eq '(^|[[:space:]])(-p|--partition)[[:space:]=]+debug([[:space:]]|$)' && continue
+        return 0
+    done <<<"$SLURM_SEGS"
+    return 1
+}
+
+# Does the #SBATCH prologue of the script named in this sbatch segment pin
+# the debug partition? Exit 0 only on a confident yes.
+sbatch_script_partition_is_debug() {
+    printf '%s' "$1" | PRECHECK_CWD="${CWD:-}" python3 -c '
+import os, sys
+toks = sys.stdin.read().split()
+# Locate the script operand: skip option tokens; a lone "-X" or "--opt"
+# (no "=") is assumed to take the next token as its argument. Boolean
+# flags therefore mis-skip the operand and we fail to find a script —
+# the caller then prompts, which is the conservative direction.
+i, script = 0, None
+while i < len(toks):
+    t = toks[i]
+    if t.startswith("--"):
+        i += 1 if "=" in t else 2
+    elif t.startswith("-") and len(t) > 2:
+        i += 1              # glued short-option value, e.g. -Jname
+    elif t.startswith("-"):
+        i += 2              # short option with separate value
+    else:
+        script = t
+        break
+if script is None:
+    sys.exit(1)
+if not os.path.isabs(script):
+    script = os.path.join(os.environ.get("PRECHECK_CWD") or ".", script)
+# isfile() also rejects FIFOs, which open() would hang on.
+if not os.path.isfile(script):
+    sys.exit(1)
+parts = []
+try:
+    with open(script, errors="replace") as f:
+        for n, ln in enumerate(f):
+            if n > 200:      # prologues are short; do not scan huge files
+                break
+            s = ln.strip()
+            if s.startswith("#SBATCH"):
+                t = s[len("#SBATCH"):].split()
+                j = 0
+                while j < len(t):
+                    a = t[j]
+                    if a in ("-p", "--partition") and j + 1 < len(t):
+                        parts.append(t[j + 1]); j += 2; continue
+                    if a.startswith("--partition="):
+                        parts.append(a.split("=", 1)[1])
+                    elif a.startswith("-p") and len(a) > 2:
+                        parts.append(a[2:])
+                    j += 1
+                continue
+            if s == "" or s.startswith("#"):
+                continue     # blanks, comments, shebang may precede directives
+            break            # first real command ends the prologue
+except OSError:
+    sys.exit(1)
+sys.exit(0 if parts and all(p == "debug" for p in parts) else 1)
+'
+}
+
+# Rule 9 driver: does any sbatch segment need the prompt?
+sbatch_needs_prompt() {
+    local v rest
+    while IFS=$'\t' read -r v rest; do
+        [ "$v" = "sbatch" ] || continue
+        # Command line wins, as it does for sbatch itself.
+        printf '%s' "$rest" | grep -Eq '(^|[[:space:]])(-p|--partition)[[:space:]=]+debug([[:space:]]|$)' && continue
+        printf '%s' "$rest" | grep -Eq '(^|[[:space:]])(-p|--partition)([[:space:]=])' && return 0
+        # No partition on the command line: consult the script prologue.
+        sbatch_script_partition_is_debug "$rest" || return 0
+    done <<<"$SLURM_SEGS"
+    return 1
+}
+
+if sbatch_needs_prompt; then
     emit_ask "submitting a SLURM job. Show the user the job script first, then confirm: --account is one of their groups ('sacctmgr show assoc user=\$USER'), and --partition / --mem / --time / --cpus-per-task / --gres are right and within the group's QOS. For a quick test prefer '--partition=debug --time=0:30:00' over a multi-day partition. Do not 'sbatch' until the user has okayed the script."
 fi
 
 # 9b. salloc / srun --pty without --partition=debug — nudge toward the debug
 #     queue for interactive testing instead of the default 2-day 'main'.
-if has_pattern '(^|[^a-zA-Z0-9_])(salloc|srun)([[:space:]]|$)' \
-   && has_pattern '(^|[^a-zA-Z0-9_])(salloc|srun[^;&|]*--pty)([[:space:]]|$)' \
-   && ! has_pattern '(-p|--partition)[[:space:]=]+debug([[:space:]]|$)'; then
+#
+#     Skipped when SLURM_JOB_ID is set, i.e. we are already inside an
+#     allocation. There, 'srun --pty bash' attaches to resources that were
+#     already granted and requests nothing new, so there is no partition
+#     choice left to nudge — the partition was fixed by the salloc that
+#     created the allocation. This is step 2 of the documented flow in
+#     CLAUDE.md §2 ('salloc --partition=debug ...' then 'srun --pty bash'),
+#     which otherwise prompts every time despite being exactly right.
+#     Outside an allocation SLURM_JOB_ID is unset and the nudge still fires,
+#     because there 'srun --pty' *does* create a new allocation on the
+#     default partition.
+#     Matching is command-position only (see §9) — the old substring form
+#     fired on any command that merely contained the word salloc or srun.
+#
+# Interactive srun: a non-debug segment that also carries --pty.
+srun_pty_nondebug() {
+    local v rest
+    while IFS=$'\t' read -r v rest; do
+        [ "$v" = "srun" ] || continue
+        printf '%s' "$rest" | grep -Eq '(^|[[:space:]])--pty([[:space:]]|$)' || continue
+        printf '%s' "$rest" | grep -Eq '(^|[[:space:]])(-p|--partition)[[:space:]=]+debug([[:space:]]|$)' && continue
+        return 0
+    done <<<"$SLURM_SEGS"
+    return 1
+}
+
+#     The SLURM_JOB_ID skip applies to srun only. salloc requests *new*
+#     resources whatever the context, so it keeps the nudge even when run
+#     from inside an existing allocation.
+if slurm_seg_nondebug salloc \
+   || { [ -z "${SLURM_JOB_ID:-}" ] && srun_pty_nondebug; }; then
     emit_ask "interactive allocation without '--partition=debug'. For a quick test, 'salloc --partition=debug --time=0:30:00 --mem=8G --cpus-per-task=4' schedules fast and doesn't draw down the 2-day allocation; only move to main/gpu/epyc-64/etc. once it works. Confirm to continue, or re-run with --partition=debug."
 fi
 
