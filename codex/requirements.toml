@@ -8,7 +8,7 @@ allowed_approval_policies = ["untrusted", "on-request"]
 allowed_sandbox_modes = ["read-only", "workspace-write"]
 
 # Empty means only "disabled" is allowed.
-allowed_web_search_modes = []
+# allowed_web_search_modes = []
 
 # Managed hooks remain active, but user/project/session/plugin hooks are
 # skipped. This keeps the CARC precheck hook from being bypassed or diluted by
