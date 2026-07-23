@@ -1,7 +1,7 @@
 {
   "_comment": "CARC Phase 1 soft-launch managed settings for Claude Code 2.1.x. Deploy to /etc/claude-code/managed-settings.json on the login nodes (discovery1/2, endeavour1/2) as mode 0644, root:root, alongside hooks/precheck.sh. Posture: disable bypass mode, enforce managed rules, wire the PreToolUse hook on every Bash/Write/Edit/Read call, hard-deny unambiguously-exfil-or-destruction calls (incl. writing ~/.ssh/authorized_keys), and force an un-skippable user prompt for edits to shell-init/credential files AND for reads of files that commonly hold secrets (~/.bashrc, shell history, ~/.aws/**, kubeconfig, ...). The hook adds the dynamic checks the static rules can't express: destroying/recursive-chmod-ing $HOME, the 'cd ~ && rm -rf *' escape hatch, and running real computation (mpirun, torchrun, deepspeed, jupyter lab, ollama serve, matlab -batch, nextflow run, python script.py, ...) on a shared login node — pushing users to 'salloc --partition=debug' / sbatch instead. No sandboxing in Phase 1 (bubblewrap not installed cluster-wide). Root-only destructive commands (mkfs, fdisk, shutdown, ...) are not listed — the OS already refuses them for non-root users.",
 
-  "_comment_rev_2026_07_21": "Revision for Claude Code >= 2.1.210. (1) Removed dead Write(path) rules — file permission checks match only Edit(path)/Read(path), and Edit rules already cover the Write and NotebookEdit tools. Every removed Write rule had an identical Edit twin, so no coverage was lost; this only silences the startup warnings added in 2.1.210. (2) Changed /etc rules to //etc — a single leading slash anchors at the settings source directory (/etc/claude-code/), NOT the filesystem root, so the previous rules silently protected nothing. Verified empirically: Read(/etc/sudoers) fell through to a kernel EACCES instead of a rule denial, while the ~/ rules denied correctly. (3) Added Edit ask-rules for shell-init and credential paths that previously prompted on read but not on write (~/.bash_aliases, ~/.zlogin, ~/.Renviron, ~/.kube, ~/.azure, ~/.terraform.d, ~/.cache/huggingface).",
+  "_comment_rev_2026_07_21": "Revision for Claude Code >= 2.1.210. (1) Removed dead Write(path) rules — file permission checks match only Edit(path)/Read(path), and Edit rules already cover the Write and NotebookEdit tools. Every removed Write rule had an identical Edit twin, so no coverage was lost; this only silences the startup warnings added in 2.1.210. (2) Changed /etc rules to //etc — a single leading slash anchors at the settings source directory (/etc/claude-code/), NOT the filesystem root, so the previous rules silently protected nothing. Verified empirically: Read(/etc/sudoers) fell through to a kernel EACCES instead of a rule denial, while the ~/ rules denied correctly. (3) Added Edit ask-rules for shell-init and credential paths that previously prompted on read but not on write (~/.bash_aliases, ~/.zlogin, ~/.Renviron, ~/.kube, ~/.azure, ~/.terraform.d, ~/.cache/huggingface). (4) Added a minimal managed allowlist (ruff check/format, per user ticket) — allowManagedPermissionRulesOnly only discards rules from other sources; allow rules here are honored, and deny/ask rules plus the PreToolUse hook still outrank them.",
 
   "allowManagedPermissionRulesOnly": true,
   "allowManagedHooksOnly": true,
@@ -9,6 +9,11 @@
   "permissions": {
     "defaultMode": "default",
     "disableBypassPermissionsMode": "disable",
+
+    "allow": [
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)"
+    ],
 
     "deny": [
       "Bash(sudo:*)",
